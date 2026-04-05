@@ -29,14 +29,23 @@ class AsyncTicker:
         self._last_tick_time: float = 0
         self._subscribed_tokens: set[int] = set()
         self._instrument_map: dict[int, tuple[str, str]] = {}  # token -> (symbol, exchange)
+        self._tick_count: int = 0
+        self._drop_count: int = 0
+        self._permanently_disconnected: bool = False
+        self._health_alert_callback: callable | None = None
 
     def set_instrument_map(self, mapping: dict[int, tuple[str, str]]) -> None:
         """Set instrument_token -> (tradingsymbol, exchange) mapping."""
         self._instrument_map = mapping
 
+    def set_health_alert_callback(self, callback: callable) -> None:
+        """Set callback for health alerts. Signature: callback(message: str)"""
+        self._health_alert_callback = callback
+
     def _on_ticks(self, ws, ticks: list[dict]) -> None:
         """Callback: convert raw ticks and push to async queue."""
         self._last_tick_time = time.monotonic()
+        self._tick_count += len(ticks)
         for raw in ticks:
             token = raw.get("instrument_token", 0)
             symbol, exchange = self._instrument_map.get(token, (str(token), "NSE"))
@@ -71,6 +80,7 @@ class AsyncTicker:
         try:
             self._tick_queue.put_nowait(tick)
         except asyncio.QueueFull:
+            self._drop_count += 1
             # Drop oldest tick if queue is full (backpressure)
             try:
                 self._tick_queue.get_nowait()
@@ -101,6 +111,9 @@ class AsyncTicker:
 
     def _on_noreconnect(self, ws) -> None:
         logger.error("WebSocket reconnection failed permanently")
+        self._permanently_disconnected = True
+        if self._health_alert_callback:
+            self._health_alert_callback("WebSocket permanently disconnected")
 
     def subscribe(self, tokens: list[int]) -> None:
         """Subscribe to instrument tokens."""
@@ -159,3 +172,38 @@ class AsyncTicker:
         if self._last_tick_time == 0:
             return float("inf")
         return time.monotonic() - self._last_tick_time
+
+    @property
+    def tick_count(self) -> int:
+        return self._tick_count
+
+    @property
+    def drop_count(self) -> int:
+        return self._drop_count
+
+    async def health_monitor(self, shutdown_event: asyncio.Event, stale_threshold_s: float = 30.0) -> None:
+        """Periodic health check. Auto-restarts ticker on permanent disconnect or stale data."""
+        while not shutdown_event.is_set():
+            await asyncio.sleep(5.0)
+
+            if self._permanently_disconnected:
+                logger.warning("Ticker permanently disconnected — attempting restart")
+                await self._restart()
+                continue
+
+            if self.is_connected and self.seconds_since_last_tick > stale_threshold_s:
+                msg = f"No ticks for {self.seconds_since_last_tick:.0f}s (threshold: {stale_threshold_s}s)"
+                logger.warning(msg)
+                if self._health_alert_callback:
+                    self._health_alert_callback(msg)
+                if self.seconds_since_last_tick > stale_threshold_s * 3:
+                    logger.error("Tick silence too long — restarting ticker")
+                    await self._restart()
+
+    async def _restart(self) -> None:
+        """Stop and restart the WebSocket connection."""
+        logger.info("Restarting WebSocket ticker...")
+        await self.stop()
+        self._permanently_disconnected = False
+        await asyncio.sleep(2.0)
+        await self.start()

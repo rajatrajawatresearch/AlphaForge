@@ -1,23 +1,39 @@
 """Dashboard callbacks for live updates."""
 
+import threading
+
 import plotly.graph_objects as go
-from dash import Input, Output, callback
+from dash import Input, Output
 
 from ..utils.time import now_ist, is_market_open
 
-# Shared state (set by dashboard app on startup)
+# Thread-safe shared state
 _state = {
     "pnl_history": [],
     "positions": [],
     "orders": [],
     "risk_state": {},
     "kill_switch_cb": None,
+    "mode": "paper",
+    "total_pnl": 0,
+    "realized_pnl": 0,
+    "unrealized_pnl": 0,
+    "trades_today": 0,
+    "capital_used_pct": 0,
 }
+_state_lock = threading.Lock()
 
 
 def set_shared_state(state: dict):
-    """Set shared state from main app."""
-    _state.update(state)
+    """Thread-safe state update from main app."""
+    with _state_lock:
+        _state.update(state)
+
+
+def _get_state() -> dict:
+    """Thread-safe shallow copy of state."""
+    with _state_lock:
+        return dict(_state)
 
 
 def register_callbacks(app):
@@ -28,9 +44,10 @@ def register_callbacks(app):
         Input("refresh-interval", "n_intervals"),
     )
     def update_header(n):
+        state = _get_state()
         now = now_ist()
         market = "OPEN" if is_market_open(now) else "CLOSED"
-        mode = _state.get("mode", "paper").upper()
+        mode = state.get("mode", "paper").upper()
         return f"{now.strftime('%H:%M:%S IST')} | Market: {market} | Mode: {mode}"
 
     @app.callback(
@@ -41,12 +58,14 @@ def register_callbacks(app):
         Input("refresh-interval", "n_intervals"),
     )
     def update_metrics(n):
-        total_pnl = _state.get("total_pnl", 0)
-        realized = _state.get("realized_pnl", 0)
-        unrealized = _state.get("unrealized_pnl", 0)
-        positions = len(_state.get("positions", []))
-        trades = _state.get("trades_today", 0)
-        capital_pct = _state.get("capital_used_pct", 0)
+        state = _get_state()
+        total_pnl = state.get("total_pnl", 0)
+        realized = state.get("realized_pnl", 0)
+        unrealized = state.get("unrealized_pnl", 0)
+        positions = state.get("positions", [])
+        pos_count = len(positions) if isinstance(positions, list) else 0
+        trades = state.get("trades_today", 0)
+        capital_pct = state.get("capital_used_pct", 0)
 
         pnl_class = "value value-positive" if total_pnl >= 0 else "value value-negative"
 
@@ -54,7 +73,7 @@ def register_callbacks(app):
             f"₹{total_pnl:,.2f}", pnl_class,
             f"₹{realized:,.2f}",
             f"₹{unrealized:,.2f}",
-            str(positions),
+            str(pos_count),
             str(trades),
             f"{capital_pct:.1f}%",
         )
@@ -64,13 +83,13 @@ def register_callbacks(app):
         Input("refresh-interval", "n_intervals"),
     )
     def update_pnl_chart(n):
-        history = _state.get("pnl_history", [])
+        state = _get_state()
+        history = state.get("pnl_history", [])
 
         fig = go.Figure()
         if history:
             times = [h["time"] for h in history]
             values = [h["pnl"] for h in history]
-            colors = ["#10b981" if v >= 0 else "#ef4444" for v in values]
 
             fig.add_trace(go.Scatter(
                 x=times, y=values,
@@ -98,48 +117,57 @@ def register_callbacks(app):
         Input("refresh-interval", "n_intervals"),
     )
     def update_positions(n):
-        positions = _state.get("positions", [])
-        return [
-            {
-                "symbol": p.tradingsymbol,
-                "exchange": p.exchange,
-                "quantity": p.quantity,
-                "avg_price": p.average_price,
-                "ltp": p.last_price,
-                "pnl": p.pnl,
-                "strategy": p.strategy_name,
-                "stop_loss": p.stop_loss or 0,
-                "target": p.target or 0,
-            }
-            for p in positions
-        ]
+        state = _get_state()
+        positions = state.get("positions", [])
+        rows = []
+        for p in positions:
+            try:
+                rows.append({
+                    "symbol": p.tradingsymbol,
+                    "exchange": p.exchange,
+                    "quantity": p.quantity,
+                    "avg_price": p.average_price,
+                    "ltp": p.last_price,
+                    "pnl": p.pnl,
+                    "strategy": p.strategy_name,
+                    "stop_loss": p.stop_loss or 0,
+                    "target": p.target or 0,
+                })
+            except AttributeError:
+                pass
+        return rows
 
     @app.callback(
         Output("orders-table", "data"),
         Input("refresh-interval", "n_intervals"),
     )
     def update_orders(n):
-        orders = _state.get("orders", [])
-        return [
-            {
-                "time": o.timestamp.strftime("%H:%M:%S") if hasattr(o.timestamp, "strftime") else str(o.timestamp),
-                "symbol": o.tradingsymbol,
-                "type": o.transaction_type,
-                "quantity": o.quantity,
-                "price": o.average_price or o.price,
-                "status": o.status,
-                "strategy": o.strategy_name,
-                "order_id": o.order_id,
-            }
-            for o in orders
-        ]
+        state = _get_state()
+        orders = state.get("orders", [])
+        rows = []
+        for o in orders:
+            try:
+                rows.append({
+                    "time": o.timestamp.strftime("%H:%M:%S") if hasattr(o.timestamp, "strftime") else str(o.timestamp),
+                    "symbol": o.tradingsymbol,
+                    "type": o.transaction_type,
+                    "quantity": o.quantity,
+                    "price": o.average_price or o.price,
+                    "status": o.status,
+                    "strategy": o.strategy_name,
+                    "order_id": o.order_id,
+                })
+            except AttributeError:
+                pass
+        return rows
 
     @app.callback(
         Output("strategy-pie", "figure"),
         Input("refresh-interval", "n_intervals"),
     )
     def update_strategy_pie(n):
-        risk = _state.get("risk_state", {})
+        state = _get_state()
+        risk = state.get("risk_state", {})
         limits = risk.get("strategy_limits", {})
 
         names = list(limits.keys()) if limits else ["No data"]
@@ -166,7 +194,8 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def trigger_kill_switch(n_clicks):
-        if n_clicks and _state.get("kill_switch_cb"):
-            _state["kill_switch_cb"]()
+        state = _get_state()
+        if n_clicks and state.get("kill_switch_cb"):
+            state["kill_switch_cb"]()
             return "KILL SWITCH ACTIVATED — All positions being squared off"
         return "Click to activate"

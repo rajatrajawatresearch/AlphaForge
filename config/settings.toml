@@ -19,9 +19,9 @@ initial_capital = 500000.0        # 5 lakh INR
 orb = { max_allocation_pct = 20.0, max_positions = 3 }
 vwap_reversion = { max_allocation_pct = 15.0, max_positions = 3 }
 momentum_scalper = { max_allocation_pct = 10.0, max_positions = 5 }
-options_decay = { max_allocation_pct = 25.0, max_positions = 4 }
+options_decay = { max_allocation_pct = 20.0, max_positions = 4 }
 news_sentiment = { max_allocation_pct = 15.0, max_positions = 2 }
-swing_ml = { max_allocation_pct = 25.0, max_positions = 3 }
+swing_ml = { max_allocation_pct = 20.0, max_positions = 3 }
 
 [strategies.orb]
 enabled = true

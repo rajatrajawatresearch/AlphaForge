@@ -1,7 +1,7 @@
 """Order status tracking and position management."""
 
 import logging
-from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime
 
 from ..types import OrderResponse, OrderStatus, Position
@@ -17,6 +17,11 @@ class PositionTracker:
         self._positions: dict[str, Position] = {}  # "NSE:RELIANCE:strategy" → Position
         self._realized_pnl: float = 0.0
         self._trade_log: list[dict] = []
+        self._on_pnl_callbacks: list[Callable[[float], None]] = []
+
+    def on_realized_pnl(self, callback: Callable[[float], None]) -> None:
+        """Register a callback fired when a position closes. Receives the P&L delta."""
+        self._on_pnl_callbacks.append(callback)
 
     def process_fill(self, order: OrderResponse, last_price: float | None = None) -> None:
         """Process a filled order — open or close position."""
@@ -54,6 +59,11 @@ class PositionTracker:
     def _close_position(self, key: str, pnl: float, order: OrderResponse) -> None:
         pos = self._positions.pop(key, None)
         self._realized_pnl += pnl
+        for cb in self._on_pnl_callbacks:
+            try:
+                cb(pnl)
+            except Exception as e:
+                logger.error("P&L callback error: %s", e)
         self._trade_log.append({
             "symbol": order.tradingsymbol,
             "exchange": order.exchange,

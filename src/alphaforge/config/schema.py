@@ -1,6 +1,6 @@
 """Pydantic models for configuration validation."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AppSection(BaseModel):
@@ -16,17 +16,40 @@ class BrokerSection(BaseModel):
 
 
 class StrategyLimit(BaseModel):
-    max_allocation_pct: float = 20.0
-    max_positions: int = 3
+    max_allocation_pct: float = Field(20.0, gt=0, le=100.0)
+    max_positions: int = Field(3, gt=0, le=50)
+
+
+class PaperSection(BaseModel):
+    slippage_pct: float = 0.05
+    latency_min_ms: int = 50
+    latency_max_ms: int = 200
+
+
+class TelegramSection(BaseModel):
+    enabled: bool = False
+    bot_token: str = ""
+    chat_id: str = ""
 
 
 class RiskSection(BaseModel):
-    max_capital_per_trade_pct: float = 2.0
-    daily_loss_limit_pct: float = 3.0
-    max_concurrent_positions: int = 10
+    max_capital_per_trade_pct: float = Field(2.0, gt=0, le=10.0)
+    daily_loss_limit_pct: float = Field(3.0, gt=0, le=20.0)
+    max_concurrent_positions: int = Field(10, gt=0, le=50)
     trailing_stop_atr_multiplier: float = 2.0
-    initial_capital: float = 500000.0
+    initial_capital: float = Field(500000.0, gt=0)
     strategy_limits: dict[str, StrategyLimit] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_allocations(self) -> "RiskSection":
+        if self.strategy_limits:
+            total = sum(sl.max_allocation_pct for sl in self.strategy_limits.values())
+            if total > 100.0:
+                breakdown = ", ".join(f"{k}={v.max_allocation_pct}%" for k, v in self.strategy_limits.items())
+                raise ValueError(
+                    f"Strategy allocations sum to {total}% (must be <= 100%). Breakdown: {breakdown}"
+                )
+        return self
 
 
 class ORBConfig(BaseModel):
@@ -124,3 +147,5 @@ class AppConfig(BaseModel):
     ai: AISection = Field(default_factory=AISection)
     news: NewsSection = Field(default_factory=NewsSection)
     dashboard: DashboardSection = Field(default_factory=DashboardSection)
+    paper: PaperSection = Field(default_factory=PaperSection)
+    telegram: TelegramSection = Field(default_factory=TelegramSection)
