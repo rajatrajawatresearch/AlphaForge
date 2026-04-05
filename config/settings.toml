@@ -1,0 +1,94 @@
+[app]
+name = "AlphaForge"
+mode = "paper"                    # "paper" or "live"
+timezone = "Asia/Kolkata"
+log_level = "INFO"
+
+[broker]
+api_key = "${KITE_API_KEY}"
+api_secret = "${KITE_API_SECRET}"
+
+[risk]
+max_capital_per_trade_pct = 2.0
+daily_loss_limit_pct = 3.0
+max_concurrent_positions = 10
+trailing_stop_atr_multiplier = 2.0
+initial_capital = 500000.0        # 5 lakh INR
+
+[risk.strategy_limits]
+orb = { max_allocation_pct = 20.0, max_positions = 3 }
+vwap_reversion = { max_allocation_pct = 15.0, max_positions = 3 }
+momentum_scalper = { max_allocation_pct = 10.0, max_positions = 5 }
+options_decay = { max_allocation_pct = 25.0, max_positions = 4 }
+news_sentiment = { max_allocation_pct = 15.0, max_positions = 2 }
+swing_ml = { max_allocation_pct = 25.0, max_positions = 3 }
+
+[strategies.orb]
+enabled = true
+symbols = ["NIFTY 50", "BANKNIFTY", "RELIANCE", "TCS", "INFY"]
+candle_interval = "15minute"
+breakout_buffer_pct = 0.1
+stop_loss_pct = 0.5
+target_pct = 1.0
+product = "MIS"
+
+[strategies.vwap_reversion]
+enabled = true
+symbols = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"]
+deviation_threshold = 1.5
+reversion_target_pct = 50.0
+product = "MIS"
+
+[strategies.momentum_scalper]
+enabled = true
+symbols = ["NIFTY 50", "BANKNIFTY"]
+candle_interval = "minute"
+rsi_period = 7
+rsi_overbought = 75.0
+rsi_oversold = 25.0
+product = "MIS"
+
+[strategies.options_decay]
+enabled = true
+underlyings = ["NIFTY", "BANKNIFTY"]
+days_to_expiry_max = 7
+otm_strikes_away = 2
+min_premium = 50.0
+product = "NRML"
+
+[strategies.news_sentiment]
+enabled = true
+symbols = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"]
+sentiment_threshold = 0.8
+max_trades_per_day = 3
+product = "CNC"
+
+[strategies.swing_ml]
+enabled = true
+symbols = ["NIFTY 50", "RELIANCE", "TCS", "INFY", "HDFCBANK"]
+prediction_horizon_days = 5
+confidence_threshold = 0.7
+retrain_interval_days = 7
+product = "CNC"
+
+[data]
+historical_days = 365
+cache_format = "parquet"
+sqlite_path = "data/alphaforge.db"
+
+[ai]
+anthropic_model = "claude-sonnet-4-20250514"
+max_tokens = 1024
+sentiment_batch_size = 5
+
+[news]
+rss_feeds = [
+    "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
+    "https://www.moneycontrol.com/rss/marketreports.xml",
+]
+poll_interval_seconds = 60
+
+[dashboard]
+host = "127.0.0.1"
+port = 8050
+update_interval_ms = 2000
